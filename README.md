@@ -34,7 +34,9 @@ python -m line_profiler "/path/to/lprof/script.py.lprof" > "your_line_profile_na
 4. Use the ProfileProcessor() to plot the results
 
 export lpath="/path/to/your_line_profile_name.txt"
+
 export mpath="/path/to/your_memory_profile_name.txt"
+
 python profile_processing $mpath $lpath
 
 ## All at once
