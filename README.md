@@ -11,7 +11,7 @@ profiler_testing.py -- Script that does some arbitrary NumPy operations
 profile_processing.py -- Contains the Python class that processes the profiling results
 
 create_profiles.sh -- bash script that runs memory_profiler, line_profiler, and the profile processing all at once
-  NOTE: Only works on UNIX
-  HOW TO: run with something like ~ pythonFile=profiler_testing bash create_profiles.sh
+NOTE: Only works on UNIX
+HOW TO: run with something like ~ pythonFile=profiler_testing bash create_profiles.sh
   
 profiles (.txt and .lprof) -- Contains the results of the profiling
