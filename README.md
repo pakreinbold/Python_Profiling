@@ -15,6 +15,28 @@ create_profiles.sh -- bash script that runs memory_profiler, line_profiler, and 
   
 profiles (.txt and .lprof) -- Contains the results of the profiling
 
+## In steps
+
+Can work in UNIX or Windows PowerShell. 
+
+1. Run the memory profiler, and save the output in a text file
+
+python -m memory_profiler "/path/to/python/script.py" > "your_memory_profile_name.txt"
+
+2. Run the line profiler to generate the the lprof file
+
+kernprof -l "path/to/python/script.py"
+
+3. Run line profiler with python, and save output in a text file
+
+python -m line_profiler "/path/to/lprof/script.py.lprof" > "your_line_profile_name.txt"
+
+4. Use the ProfileProcessor() to plot the results
+
+export lpath="/path/to/your_line_profile_name.txt"
+export mpath="/path/to/your_memory_profile_name.txt"
+python profile_processing $mpath $lpath
+
 ## All at once
 
 Only works on UNIX. Run the following. This assumes the script is located in /scripts_to_profile/
