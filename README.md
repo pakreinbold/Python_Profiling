@@ -28,16 +28,14 @@ python -m memory_profiler "/path/to/python/script.py" > "your_memory_profile_nam
 kernprof -l "path/to/python/script.py"
 
 3. Run line profiler with python, and save output in a text file
-
-python -m line_profiler "/path/to/lprof/script.py.lprof" > "your_line_profile_name.txt"
+```python -m line_profiler "/path/to/lprof/script.py.lprof" > "your_line_profile_name.txt"```
 
 4. Use the ProfileProcessor() to plot the results
-
+```
 export lpath="/path/to/your_line_profile_name.txt"
-
 export mpath="/path/to/your_memory_profile_name.txt"
-
 python profile_processing $mpath $lpath
+```
 
 ## All at once
 
