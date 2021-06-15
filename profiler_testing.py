@@ -1,5 +1,6 @@
 import numpy as np
 
+
 @profile
 def fun(m, n):
     '''
@@ -30,6 +31,7 @@ def fun(m, n):
         print('powdy')
 
     return f, g, h, T, t, r, s
+
 
 @profile
 def make_randoms(m, n):
