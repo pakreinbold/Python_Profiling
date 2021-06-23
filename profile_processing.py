@@ -3,6 +3,8 @@ import re
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 import argparse
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 
 class ProfileProcessor:
@@ -102,10 +104,6 @@ class ProfileProcessor:
         return matches
 
     def get_mem_rows(self, string, matches):
-        # rows = [[int(string[n]), float(string[n+1]),
-        #          float(string[n+3]), int(string[n+5]),
-        #          string[n+6] == '@profile']
-        #         for n in matches]
         rows = []
         for n in matches:
             row = [int(string[n]), float(string[n+1]),
@@ -171,7 +169,8 @@ class ProfileProcessor:
             .set_index('line')
 
         # create figure and axis objects with subplots()
-        fig, ax = plt.subplots(figsize=(12, 6))
+        fig_x = 18
+        _, ax = plt.subplots(figsize=(fig_x, 6))
 
         # Make first Plot
         ax.plot(df.index, df['time (s)'], '_', color="red", marker="^")
@@ -187,12 +186,16 @@ class ProfileProcessor:
                  color="blue", marker="v")
         mn = df['memory delta (MiB)'].min()
         mx = df['memory delta (MiB)'].max()
-        for fun_start, fun_name in self.fun_locs.items():
-            ax2.plot([fun_start, fun_start], [mn, mx], 'k--')
-            ax2.text(fun_start-1, mn + mx/3, fun_name, rotation='vertical',
-                     fontname=font, fontsize=fs-2)
         ax2.set_ylabel("Memory Change (MiB)",
                        color="blue", fontsize=fs, fontname=font)
+
+        # Add function labels
+        for fun_start, fun_name in self.fun_locs.items():
+            ax2.plot([fun_start, fun_start], [mn, mx], 'k--')
+            ax2.text(fun_start, (mx + mn)/2, fun_name, rotation='vertical',
+                     fontname=font, fontsize=fs-2,
+                     bbox={'facecolor': 'white', 'edgecolor': 'black'},
+                     ha='center', va='center')
 
         if xtick_style == 'dense':
             ax.xaxis.set_major_locator(MultipleLocator(5))
@@ -205,6 +208,43 @@ class ProfileProcessor:
             ax2.tick_params(direction="in")
 
         plt.show()
+
+    def plotly_both(self):
+        # Make the merged DataFrame
+        if not (self.memory_text and self.line_text):
+            raise Exception('Need both memory and line to plot both.')
+
+        df = self.memory_df.merge(self.line_df, on='line', how='outer')\
+            .set_index('line')
+
+        # Create figure with secondary y-axis
+        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+        # Make first scatter
+        fig.add_trace(
+            go.Scatter(
+                x=df.index, y=df['time (s)'],
+                name='Time Profiling', mode='markers',
+                marker_symbol='triangle-up'
+                ),
+            secondary_y=False
+        )
+
+        # Make the second scatter
+        fig.add_trace(
+            go.Scatter(
+                x=df.index, y=df['memory delta (MiB)'],
+                name='Memory Profiling', mode='markers',
+                marker_symbol='triangle-down'
+                ),
+            secondary_y=True
+        )
+
+        # Set y-axes titles
+        fig.update_yaxes(title_text='Time (s)', secondary_y=False)
+        fig.update_yaxes(title_text="Memory Change (MiB)", secondary_y=True)
+
+        fig.show()
 
 
 if __name__ == '__main__':
