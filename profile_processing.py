@@ -136,6 +136,18 @@ class ProfileProcessor:
 
         return
 
+    def find_next_gen(self, row, function_list):
+        parent = row['Function']
+        text = row['Text']
+        try:
+            child = text.split('(')[0].split()[-1]
+            if child in function_list:
+                return child
+            else:
+                return parent
+        except Exception:
+            return parent
+
     def get_profile_df(self, kind):
 
         # Filter the kind of profile
@@ -274,12 +286,16 @@ class ProfileProcessor:
 
         if 'Function' not in df.columns:
             self.find_functions(df)
+        if 'Branch-Function' not in df.columns:
+            df['Branch-Function'] = df.apply(
+                lambda row: self.find_next_gen(row, df['Function'].unique()),
+                axis=1)
 
         hover = {'Line': True, 'Text': True}
 
         fig = px.bar(
             df, x='Function', y=ylbl,
-            color='Function', hover_data=hover
+            color='Branch-Function', hover_data=hover
         )
         fig.update_layout(width=1000, height=500)
         fig.show()
