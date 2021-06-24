@@ -1,10 +1,9 @@
+import numpy as np
 import pandas as pd
-import re
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MultipleLocator
 import argparse
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+import plotly.express as px
 
 
 class ProfileProcessor:
@@ -39,9 +38,6 @@ class ProfileProcessor:
         checks if string can be converted to int
     get_dtype:
         assigns type to string in order of int, float, MiB, str
-    find_pattern_matches:
-        finds occurences of patterns in text objects to find locations of
-        DataFrame rows
     get_mem_rows, get_line_rows:
         constructs the rows of the DataFrame based on text file structure
     get_profile_df:
@@ -62,14 +58,19 @@ class ProfileProcessor:
         if self.memory_path:
             with open(self.memory_path) as text_file:
                 text = text_file.read()
-            self.memory_text = text.replace('\x00', '').split()
-            self.memory_df = self.get_profile_df(self.memory_text, 'memory')
+            # self.memory_text = text.replace('\x00', '')\
+            #     .replace('\n', '?').split()
+            self.memory_text = [s.split() for s in text.replace('\x00', '')
+                                .split('\n') if s != '']
+            self.memory_df = self.get_profile_df('memory')
 
         if self.line_path:
             with open(self.line_path) as text_file:
                 text = text_file.read()
-            self.line_text = text.replace('\x00', '').split()
-            self.line_df = self.get_profile_df(self.line_text, 'line')
+            # self.line_text = text.replace('\x00', '').split()
+            self.line_text = [s.split() for s in text.replace('\x00', '')
+                              .split('\n') if s != '']
+            self.line_df = self.get_profile_df('line')
 
     def is_float(self, s):
         try:
@@ -95,85 +96,96 @@ class ProfileProcessor:
         else:
             return 's'
 
-    def find_pattern_matches(self, string, pattern):
-        matches = []
-        for n in range(len(string) - len(pattern) + 1):
-            s = ''.join(string[n:n+len(pattern)])
-            if s == pattern:
-                matches.append(n)
-        return matches
-
-    def get_mem_rows(self, string, matches):
+    def get_mem_rows(self, pattern):
         rows = []
-        for n in matches:
-            row = [int(string[n]), float(string[n+1]),
-                   float(string[n+3]), int(string[n+5]),
-                   string[n+6] == '@profile']
-            if string[n+6] == '@profile':
-                self.fun_locs[row[0]] = string[n+9].split('(')[0]
-            rows.append(row)
+        for line in self.memory_text:
+            types = ''.join([self.get_dtype(s) for s in line])
+            if types[0] == 'i':
+                if types[:len(pattern)] == pattern:
+                    rows.append([int(line[0]), float(line[1]), float(line[3]),
+                                 int(line[5]), ' '.join(line[6:])])
+                else:
+                    rows.append([int(line[0]), np.nan, np.nan, np.nan,
+                                 ' '.join(line[1:])])
         return rows
 
-    def get_line_rows(self, string, matches):
-        rows = [[int(string[n]), int(string[n+1]),
-                 float(string[n+2]), float(string[n+3]), float(string[n+4])]
-                for n in matches]
+    def get_line_rows(self, pattern):
+        rows = []
+        for line in self.line_text:
+            types = ''.join([self.get_dtype(s) for s in line])
+            if types[0] == 'i':
+                if types[:len(pattern)] == pattern:
+                    rows.append([int(line[0]), int(line[1]), float(line[2]),
+                                 float(line[3]), float(line[4]),
+                                 ' '.join(line[5:])])
+                else:
+                    rows.append([int(line[0]), 0, 0, 0, 0, ' '.join(line[1:])])
         return rows
 
-    def get_profile_df(self, text, kind):
+    def find_functions(self, df):
+        df['Function'] = None
 
-        # Classify each of the strings in the text
-        types = [self.get_dtype(s) for s in text]
+        for n in range(len(df)):
+            if df.loc[n, 'Text'] == '@profile':
+                df.loc[n, 'Function'] = df.loc[n+1, 'Text'].split()[1]\
+                    .split('(')[0]
+            else:
+                df.loc[n, 'Function'] = df.loc[n-1, 'Function']
+
+            self.fun_locs = df.groupby('Function')['Line'].min().to_dict()
+
+        return
+
+    def get_profile_df(self, kind):
 
         # Filter the kind of profile
         if kind == 'memory':
             pattern = 'ifmfmi'
             get_rows = self.get_mem_rows
-            cols = ['line', 'total memory (MiB)', 'memory delta (MiB)',
-                    'occurences', '@profile']
+            cols = ['Line', 'Total Memory (MiB)', 'Memory Delta (MiB)',
+                    'Occurences', 'Text']
         elif kind == 'line':
             pattern = 'iifff'
             get_rows = self.get_line_rows
-            cols = ['line', 'hits', 'time (s)', 'per_hit (s)', 'perc_time (%)']
+            cols = ['Line', 'Hits', 'Time (s)', 'Per Hit (s)', 'Perc Time (%)',
+                    'Text']
         else:
             raise Exception('kind must be "memory" or "line"')
 
-        # Get indices where pattern matches start
-        matches = self.find_pattern_matches(types, pattern)
-
         # Get the rows from the pattern indices
-        rows = get_rows(text, matches)
+        rows = get_rows(pattern)
 
         # Construct DataFrame from the rows
         df = pd.DataFrame(rows, columns=cols)
 
         # Convert units to s
         if kind == 'line':
-            timer_unit = float(
-                re.findall('Timer unit: .* s', ' '.join(text))
-                [0].split()[2])
-            cols = ['time (s)', 'per_hit (s)']
+            timer_unit = float(self.line_text[0][-2])
+            cols = ['Time (s)', 'Per Hit (s)']
             df[cols] = timer_unit * df[cols]
         elif kind == 'memory':
-            df['memory delta (MiB)'] = df['total memory (MiB)'].diff()
-            df = df[~df['@profile']]
+            # df['Memory Delta (MiB)'] = df['Total Memory (MiB)'].diff()
+            df.loc[df['Text'] == '@profile', 'Memory Delta (MiB)'] = 0.0
+            df.fillna(0.0, inplace=True)
 
         return df
 
-    def plot_both(self, xtick_style=None, font='Georgia'):
+    def plot_byline(self, xtick_style=None, font='Georgia'):
         fs = 16
         if not (self.memory_text and self.line_text):
             raise Exception('Need both memory and line to plot both.')
 
-        df = self.memory_df.merge(self.line_df, on='line', how='outer')\
-            .set_index('line')
+        df = self.memory_df.merge(
+            self.line_df, on=['Line', 'Text'], how='outer'
+        )
 
         # create figure and axis objects with subplots()
         fig_x = 18
         _, ax = plt.subplots(figsize=(fig_x, 6))
 
         # Make first Plot
-        ax.plot(df.index, df['time (s)'], '_', color="red", marker="^")
+        ax.bar(x=df['Line'], height=df['Time (s)'],
+               fc=[1, 0, 0, 0.3], edgecolor=[1, 0, 0, 1])
         ax.set_xlabel("Line #", fontsize=fs, fontname=font)
         ax.set_ylabel("Time (s)",
                       color="red", fontsize=fs, fontname=font)
@@ -182,15 +194,16 @@ class ProfileProcessor:
         ax2 = ax.twinx()
 
         # Make second plot
-        ax2.plot(df.index, df['memory delta (MiB)'], '_',
-                 color="blue", marker="v")
-        mn = df['memory delta (MiB)'].min()
-        mx = df['memory delta (MiB)'].max()
+        ax2.bar(df['Line'], df['Memory Delta (MiB)'],
+                color=[0, 0, 1, 0.3], edgecolor=[0, 0, 1, 1])
+        mn = df['Memory Delta (MiB)'].min()
+        mx = df['Memory Delta (MiB)'].max()
         ax2.set_ylabel("Memory Change (MiB)",
                        color="blue", fontsize=fs, fontname=font)
 
         # Add function labels
-        for fun_start, fun_name in self.fun_locs.items():
+        self.find_functions(df)
+        for fun_name, fun_start in self.fun_locs.items():
             ax2.plot([fun_start, fun_start], [mn, mx], 'k--')
             ax2.text(fun_start, (mx + mn)/2, fun_name, rotation='vertical',
                      fontname=font, fontsize=fs-2,
@@ -209,41 +222,66 @@ class ProfileProcessor:
 
         plt.show()
 
-    def plotly_both(self):
-        # Make the merged DataFrame
-        if not (self.memory_text and self.line_text):
-            raise Exception('Need both memory and line to plot both.')
+    def plot_ranks(self, mode, num_ranks=10):
+        if mode == 'line':
+            y_lbl = 'Time (s)'
+            df = self.line_df.sort_values(y_lbl, ascending=False)\
+                .head(num_ranks).reset_index()
+            hover = {'Line': True, 'Time (s)': ':.2f', 'Hits': True,
+                     'Text': True}
+            tit = 'Slowest Lines'
+        elif mode == 'memory':
+            y_lbl = 'Memory Delta (MiB)'
+            df = self.memory_df.sort_values(y_lbl, ascending=False)\
+                .head(num_ranks).reset_index()
+            hover = {'Memory Delta (MiB)': ':.2f', 'Line': True,
+                     'Occurences': True, 'Total Memory (MiB)': ':.2f',
+                     'Text': True}
+            tit = 'Most Memory Intensive Lines'
+        else:
+            print('Input mode must be "line" or "memory". ' +
+                  f'Cannot show ranks for "{mode}"')
+            return
 
-        df = self.memory_df.merge(self.line_df, on='line', how='outer')\
-            .set_index('line')
+        # Get the top ranks
+        df.index.name = 'Rank'
+        df.index += 1
 
-        # Create figure with secondary y-axis
-        fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-        # Make first scatter
-        fig.add_trace(
-            go.Scatter(
-                x=df.index, y=df['time (s)'],
-                name='Time Profiling', mode='markers',
-                marker_symbol='triangle-up'
-                ),
-            secondary_y=False
+        # Make bar chart
+        fig = px.bar(df, x=y_lbl, color=y_lbl, orientation='h',
+                     hover_data=hover, text='Line',
+                     color_continuous_scale='sunsetdark')
+        fig.update_traces(textposition='outside')
+        fig.update_yaxes(autorange="reversed")
+        fig.update_layout(
+            title=tit,
+            yaxis=dict(
+                tickmode='linear',
+                tick0=1,
+                dtick=1
+            ),
+            width=1200, height=600
         )
+        fig.show()
 
-        # Make the second scatter
-        fig.add_trace(
-            go.Scatter(
-                x=df.index, y=df['memory delta (MiB)'],
-                name='Memory Profiling', mode='markers',
-                marker_symbol='triangle-down'
-                ),
-            secondary_y=True
+    def plot_byfn(self, mode):
+        if mode == 'memory':
+            df = self.memory_df
+            ylbl = 'Memory Delta (MiB)'
+        elif mode == 'line':
+            df = self.line_df
+            ylbl = 'Time (s)'
+
+        if 'Function' not in df.columns:
+            self.find_functions(df)
+
+        hover = {'Line': True, 'Text': True}
+
+        fig = px.bar(
+            df, x='Function', y=ylbl,
+            color='Function', hover_data=hover
         )
-
-        # Set y-axes titles
-        fig.update_yaxes(title_text='Time (s)', secondary_y=False)
-        fig.update_yaxes(title_text="Memory Change (MiB)", secondary_y=True)
-
+        fig.update_layout(width=1000, height=500)
         fig.show()
 
 
