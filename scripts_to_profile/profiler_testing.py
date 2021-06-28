@@ -1,4 +1,5 @@
 import numpy as np
+from some_package import do_some_math
 
 
 @profile
@@ -25,10 +26,16 @@ def fun(m, n):
     r = T.sum(axis=1)
     s = f'Make this 2 2.0 ugly {r[0]}'
 
-    if r.sum() > 10:
-        print('howdy')
+    hi = do_some_math(2 * m, 3 * n)
+    cond = np.abs(hi) > r.sum()
+
+    if cond:
+        if r.sum() > 10:
+            print('howdy')
+        else:
+            print('powdy')
     else:
-        print('powdy')
+        print('yowdy')
 
     return f, g, h, T, t, r, s
 

@@ -53,24 +53,35 @@ class ProfileProcessor:
         self.line_text = None
         self.memory_df = None
         self.line_df = None
-        self.fun_locs = {}
+        self.all_df = None
 
+        # Get the memory df if a path is provided to the txt file
         if self.memory_path:
             with open(self.memory_path) as text_file:
                 text = text_file.read()
-            # self.memory_text = text.replace('\x00', '')\
-            #     .replace('\n', '?').split()
             self.memory_text = [s.split() for s in text.replace('\x00', '')
                                 .split('\n') if s != '']
             self.memory_df = self.get_profile_df('memory')
 
+        # Get the line df if a path is provided to the txt file
         if self.line_path:
             with open(self.line_path) as text_file:
                 text = text_file.read()
-            # self.line_text = text.replace('\x00', '').split()
             self.line_text = [s.split() for s in text.replace('\x00', '')
                               .split('\n') if s != '']
             self.line_df = self.get_profile_df('line')
+
+        # If both txt file paths are provided make one big df
+        if self.memory_path and self.line_path:
+            self.all_df = self.memory_df.merge(
+                self.line_df, on=['Line', 'Text'], how='outer'
+            ).drop_duplicates()
+            st = set(self.all_df.columns) \
+                - {'File', 'Function', 'Line', 'Text'}
+            ordered_columns = ['File', 'Function', 'Line'] \
+                + list(st) + ['Text']
+            self.all_df = self.all_df[ordered_columns]\
+                .sort_values(['File', 'Line'])
 
     def is_float(self, s):
         try:
@@ -111,30 +122,23 @@ class ProfileProcessor:
 
     def get_line_rows(self, pattern):
         rows = []
+        function_name = None
+        file_name = None
         for line in self.line_text:
             types = ''.join([self.get_dtype(s) for s in line])
-            if types[0] == 'i':
+            if line[0] == 'File:':
+                file_name = line[1]
+            elif line[0] == 'Function:':
+                function_name = line[1]
+            elif types[0] == 'i':
                 if types[:len(pattern)] == pattern:
                     rows.append([int(line[0]), int(line[1]), float(line[2]),
                                  float(line[3]), float(line[4]),
-                                 ' '.join(line[5:])])
+                                 ' '.join(line[5:]), file_name, function_name])
                 else:
-                    rows.append([int(line[0]), 0, 0, 0, 0, ' '.join(line[1:])])
+                    rows.append([int(line[0]), 0, 0, 0, 0, ' '.join(line[1:]),
+                                file_name, function_name])
         return rows
-
-    def find_functions(self, df):
-        df['Function'] = None
-
-        for n in range(len(df)):
-            if df.loc[n, 'Text'] == '@profile':
-                df.loc[n, 'Function'] = df.loc[n+1, 'Text'].split()[1]\
-                    .split('(')[0]
-            else:
-                df.loc[n, 'Function'] = df.loc[n-1, 'Function']
-
-            self.fun_locs = df.groupby('Function')['Line'].min().to_dict()
-
-        return
 
     def find_next_gen(self, row, function_list):
         parent = row['Function']
@@ -148,6 +152,12 @@ class ProfileProcessor:
         except Exception:
             return parent
 
+    def clean_filenames(self, s, mode='osx'):
+        if mode == 'osx':
+            return s.split('/')[-1]
+        elif mode == 'win':
+            return s.split('\\')[-1]
+
     def get_profile_df(self, kind):
 
         # Filter the kind of profile
@@ -160,7 +170,7 @@ class ProfileProcessor:
             pattern = 'iifff'
             get_rows = self.get_line_rows
             cols = ['Line', 'Hits', 'Time (s)', 'Per Hit (s)', 'Perc Time (%)',
-                    'Text']
+                    'Text', 'File', 'Function']
         else:
             raise Exception('kind must be "memory" or "line"')
 
@@ -175,6 +185,8 @@ class ProfileProcessor:
             timer_unit = float(self.line_text[0][-2])
             cols = ['Time (s)', 'Per Hit (s)']
             df[cols] = timer_unit * df[cols]
+            df['File'] = df['File'].apply(
+                lambda s: self.clean_filenames(s, mode='win'))
         elif kind == 'memory':
             # df['Memory Delta (MiB)'] = df['Total Memory (MiB)'].diff()
             df.loc[df['Text'] == '@profile', 'Memory Delta (MiB)'] = 0.0
@@ -182,57 +194,60 @@ class ProfileProcessor:
 
         return df
 
-    def plot_byline(self, xtick_style=None, font='Georgia'):
+    def plot_byline(self, files=[], xtick_style=None, font='Georgia'):
         fs = 16
         if not (self.memory_text and self.line_text):
             raise Exception('Need both memory and line to plot both.')
 
-        df = self.memory_df.merge(
-            self.line_df, on=['Line', 'Text'], how='outer'
-        )
+        # If no files specified, show them all
+        if len(files) == 0:
+            files = self.all_df['File'].unique()
 
-        # create figure and axis objects with subplots()
-        fig_x = 18
-        _, ax = plt.subplots(figsize=(fig_x, 6))
+        for fl in files:
+            df = self.all_df[self.all_df['File'] == fl]
 
-        # Make first Plot
-        ax.bar(x=df['Line'], height=df['Time (s)'],
-               fc=[1, 0, 0, 0.3], edgecolor=[1, 0, 0, 1])
-        ax.set_xlabel("Line #", fontsize=fs, fontname=font)
-        ax.set_ylabel("Time (s)",
-                      color="red", fontsize=fs, fontname=font)
+            # create figure and axis objects with subplots()
+            fig_x = 18
+            _, ax = plt.subplots(figsize=(fig_x, 6))
 
-        # twin object for two different y-axis on the sample plot
-        ax2 = ax.twinx()
+            # Make first Plot
+            ax.bar(x=df['Line'], height=df['Time (s)'],
+                   fc=[1, 0, 0, 0.3], edgecolor=[1, 0, 0, 1])
+            ax.set_xlabel("Line #", fontsize=fs, fontname=font)
+            ax.set_ylabel("Time (s)",
+                          color="red", fontsize=fs, fontname=font)
 
-        # Make second plot
-        ax2.bar(df['Line'], df['Memory Delta (MiB)'],
-                color=[0, 0, 1, 0.3], edgecolor=[0, 0, 1, 1])
-        mn = df['Memory Delta (MiB)'].min()
-        mx = df['Memory Delta (MiB)'].max()
-        ax2.set_ylabel("Memory Change (MiB)",
-                       color="blue", fontsize=fs, fontname=font)
+            # twin object for two different y-axis on the sample plot
+            ax2 = ax.twinx()
 
-        # Add function labels
-        self.find_functions(df)
-        for fun_name, fun_start in self.fun_locs.items():
-            ax2.plot([fun_start, fun_start], [mn, mx], 'k--')
-            ax2.text(fun_start, (mx + mn)/2, fun_name, rotation='vertical',
-                     fontname=font, fontsize=fs-2,
-                     bbox={'facecolor': 'white', 'edgecolor': 'black'},
-                     ha='center', va='center')
+            # Make second plot
+            ax2.bar(df['Line'], df['Memory Delta (MiB)'],
+                    color=[0, 0, 1, 0.3], edgecolor=[0, 0, 1, 1])
+            mn = df['Memory Delta (MiB)'].min()
+            mx = df['Memory Delta (MiB)'].max()
+            ax2.set_ylabel("Memory Change (MiB)",
+                           color="blue", fontsize=fs, fontname=font)
 
-        if xtick_style == 'dense':
-            ax.xaxis.set_major_locator(MultipleLocator(5))
-            ax.xaxis.set_major_formatter('{x:.0f}')
+            # Add function labels
+            fun_locs = df.groupby('Function')['Line'].min().to_dict()
+            for fun_name, fun_start in fun_locs.items():
+                ax2.plot([fun_start, fun_start], [mn, mx], 'k--')
+                ax2.text(fun_start, (mx + mn)/2, fun_name, rotation='vertical',
+                         fontname=font, fontsize=fs-2,
+                         bbox={'facecolor': 'white', 'edgecolor': 'black'},
+                         ha='center', va='center')
 
-            # For the minor ticks, use no labels; default NullFormatter.
-            ax.xaxis.set_minor_locator(MultipleLocator(1))
+            if xtick_style == 'dense':
+                ax.xaxis.set_major_locator(MultipleLocator(5))
+                ax.xaxis.set_major_formatter('{x:.0f}')
 
-            ax.tick_params(direction="in", which='both')
-            ax2.tick_params(direction="in")
+                # For the minor ticks, use no labels; default NullFormatter.
+                ax.xaxis.set_minor_locator(MultipleLocator(1))
 
-        plt.show()
+                ax.tick_params(direction="in", which='both')
+                ax2.tick_params(direction="in")
+
+            plt.show()
 
     def plot_ranks(self, mode, num_ranks=10):
         if mode == 'line':
@@ -278,23 +293,20 @@ class ProfileProcessor:
 
     def plot_byfn(self, mode):
         if mode == 'memory':
-            df = self.memory_df
             ylbl = 'Memory Delta (MiB)'
         elif mode == 'line':
-            df = self.line_df
             ylbl = 'Time (s)'
 
-        if 'Function' not in df.columns:
-            self.find_functions(df)
-        if 'Branch-Function' not in df.columns:
-            df['Branch-Function'] = df.apply(
-                lambda row: self.find_next_gen(row, df['Function'].unique()),
+        if 'Branch-Function' not in self.all_df.columns:
+            self.all_df['Branch-Function'] = self.all_df.apply(
+                lambda row: self.find_next_gen(
+                    row, self.all_df['Function'].unique()),
                 axis=1)
 
         hover = {'Line': True, 'Text': True}
 
         fig = px.bar(
-            df, x='Function', y=ylbl,
+            self.all_df, x='Function', y=ylbl,
             color='Branch-Function', hover_data=hover
         )
         fig.update_layout(width=1000, height=500)
