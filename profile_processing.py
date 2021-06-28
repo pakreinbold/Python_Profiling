@@ -54,34 +54,65 @@ class ProfileProcessor:
         self.memory_df = None
         self.line_df = None
         self.all_df = None
+        self.stats_df = None
 
         # Get the memory df if a path is provided to the txt file
         if self.memory_path:
-            with open(self.memory_path) as text_file:
-                text = text_file.read()
-            self.memory_text = [s.split() for s in text.replace('\x00', '')
-                                .split('\n') if s != '']
-            self.memory_df = self.get_profile_df('memory')
+            dfs = []
+            trial_no = 0
+            for path in self.memory_path:
+                trial_no += 1
+                with open(path) as text_file:
+                    text = text_file.read()
+                self.memory_text = [s.split() for s in text.replace('\x00', '')
+                                    .split('\n') if s != '']
+                df = self.get_profile_df('memory')
+                df['Trial'] = trial_no
+                dfs.append(df)
+            self.memory_df = pd.concat(dfs)
 
         # Get the line df if a path is provided to the txt file
         if self.line_path:
-            with open(self.line_path) as text_file:
-                text = text_file.read()
-            self.line_text = [s.split() for s in text.replace('\x00', '')
-                              .split('\n') if s != '']
-            self.line_df = self.get_profile_df('line')
+            dfs = []
+            trial_no = 0
+            for path in self.line_path:
+                trial_no += 1
+                with open(path) as text_file:
+                    text = text_file.read()
+                self.line_text = [s.split() for s in text.replace('\x00', '')
+                                  .split('\n') if s != '']
+                df = self.get_profile_df('line')
+                df['Trial'] = trial_no
+                dfs.append(df)
+            self.line_df = pd.concat(dfs)
 
         # If both txt file paths are provided make one big df
         if self.memory_path and self.line_path:
             self.all_df = self.memory_df.merge(
-                self.line_df, on=['Line', 'Text'], how='outer'
+                self.line_df, on=['Line', 'Text', 'Trial'], how='outer'
             ).drop_duplicates()
             st = set(self.all_df.columns) \
-                - {'File', 'Function', 'Line', 'Text'}
+                - {'File', 'Function', 'Line', 'Text', 'Trial'}
             ordered_columns = ['File', 'Function', 'Line'] \
-                + list(st) + ['Text']
+                + list(st) + ['Text', 'Trial']
             self.all_df = self.all_df[ordered_columns]\
                 .sort_values(['File', 'Line'])
+
+            # Condense into aggregates
+            num_cols = ['Memory Delta (MiB)', 'Time (s)']
+            means = self.all_df\
+                .groupby(['File', 'Function', 'Line', 'Text'])\
+                [num_cols].mean().reset_index()
+            means.rename(
+                columns={col: 'Mean ' + col for col in num_cols},
+                inplace=True)
+            stds = self.all_df\
+                .groupby(['File', 'Function', 'Line', 'Text'])\
+                [num_cols].std().reset_index()
+            stds.rename(
+                columns={col: 'Std ' + col for col in num_cols},
+                inplace=True)
+            self.stats_df = means.merge(stds, on=['File', 'Line', 'Function', 'Text'], how='outer')
 
     def is_float(self, s):
         try:
@@ -201,30 +232,33 @@ class ProfileProcessor:
 
         # If no files specified, show them all
         if len(files) == 0:
-            files = self.all_df['File'].unique()
+            files = self.stats_df['File'].unique()
 
         for fl in files:
-            df = self.all_df[self.all_df['File'] == fl]
+            df = self.stats_df[self.stats_df['File'] == fl]
 
             # create figure and axis objects with subplots()
             fig_x = 18
             _, ax = plt.subplots(figsize=(fig_x, 6))
 
             # Make first Plot
-            ax.bar(x=df['Line'], height=df['Time (s)'],
+            ax.bar(x=df['Line'], height=df['Mean Time (s)'],
+                   yerr=df['Std Time (s)'],
                    fc=[1, 0, 0, 0.3], edgecolor=[1, 0, 0, 1])
             ax.set_xlabel("Line #", fontsize=fs, fontname=font)
             ax.set_ylabel("Time (s)",
                           color="red", fontsize=fs, fontname=font)
+            ax.set_ylim(bottom=0.0)
 
             # twin object for two different y-axis on the sample plot
             ax2 = ax.twinx()
 
             # Make second plot
-            ax2.bar(df['Line'], df['Memory Delta (MiB)'],
+            ax2.bar(df['Line'], df['Mean Memory Delta (MiB)'],
+                    yerr=df['Std Memory Delta (MiB)'],
                     color=[0, 0, 1, 0.3], edgecolor=[0, 0, 1, 1])
-            mn = df['Memory Delta (MiB)'].min()
-            mx = df['Memory Delta (MiB)'].max()
+            mn = df['Mean Memory Delta (MiB)'].min()
+            mx = df['Mean Memory Delta (MiB)'].max()
             ax2.set_ylabel("Memory Change (MiB)",
                            color="blue", fontsize=fs, fontname=font)
 
@@ -291,22 +325,22 @@ class ProfileProcessor:
         )
         fig.show()
 
-    def plot_byfn(self, mode):
+    def plot_byfn(self, mode, ag='Mean'):
         if mode == 'memory':
-            ylbl = 'Memory Delta (MiB)'
+            ylbl = ag + ' Memory Delta (MiB)'
         elif mode == 'line':
-            ylbl = 'Time (s)'
+            ylbl = ag + ' Time (s)'
 
-        if 'Branch-Function' not in self.all_df.columns:
-            self.all_df['Branch-Function'] = self.all_df.apply(
+        if 'Branch-Function' not in self.stats_df.columns:
+            self.stats_df['Branch-Function'] = self.stats_df.apply(
                 lambda row: self.find_next_gen(
-                    row, self.all_df['Function'].unique()),
+                    row, self.stats_df['Function'].unique()),
                 axis=1)
 
         hover = {'Line': True, 'Text': True}
 
         fig = px.bar(
-            self.all_df, x='Function', y=ylbl,
+            self.stats_df, x='Function', y=ylbl,
             color='Branch-Function', hover_data=hover
         )
         fig.update_layout(width=1000, height=500)
